@@ -3,7 +3,7 @@ const jwt = require("jsonwebtoken");
 
 const router = express.Router();
 
-// Tes PDFs
+// 🔥 Tes fichiers PDF
 const FILES = {
   "frame-game": "https://sahmi.ma/downloads/frame-game.pdf",
   "7-layer-blueprint": "https://sahmi.ma/downloads/7-layer-blueprint.pdf",
@@ -12,7 +12,7 @@ const FILES = {
   "closers-code": "https://sahmi.ma/downloads/closers-code.pdf"
 };
 
-// 🔐 Générer lien sécurisé (JWT)
+// 🔐 Générer lien sécurisé
 router.get("/generate", (req, res) => {
   const file = req.query.file;
 
@@ -26,12 +26,12 @@ router.get("/generate", (req, res) => {
     { expiresIn: "24h" }
   );
 
-  const link = `https://backend-elpopo-production.up.railway.app/download/verify?token=${token}`;
+  const link = `${process.env.BACKEND_URL}/download/verify?token=${token}`;
 
   res.json({ link });
 });
 
-// 🔓 Vérifier token + rediriger vers PDF
+// 🔓 Vérifier + rediriger vers PDF
 router.get("/verify", (req, res) => {
   const token = req.query.token;
 
