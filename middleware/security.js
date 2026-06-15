@@ -22,14 +22,24 @@ const helmetMiddleware = helmet({
   crossOriginOpenerPolicy: { policy: 'same-origin-allow-popups' },
 });
 
+const allowedOrigins = [
+  "https://www.reframelayers.com",
+  "https://reframelayers.com",
+  "http://localhost:3000"
+];
+
 const corsMiddleware = cors({
   origin: function (origin, cb) {
-    const allowed = (process.env.FRONTEND_URL || '').replace(/\/+$/, '');
-    // Allow same-origin (no Origin header) and the configured frontend URL.
+    // allow mobile apps / curl / server-to-server
     if (!origin) return cb(null, true);
-    if (!allowed) return cb(null, true); // permissive when FRONTEND_URL is not set
-    if (origin.replace(/\/+$/, '') === allowed) return cb(null, true);
-    return cb(new Error('CORS: origin not allowed - ' + origin));
+
+    const normalized = origin.replace(/\/+$/, '');
+
+    if (allowedOrigins.includes(normalized)) {
+      return cb(null, true);
+    }
+
+    return cb(new Error('CORS blocked: ' + origin));
   },
   credentials: false,
   methods: ['GET', 'POST', 'OPTIONS'],
