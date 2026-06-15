@@ -45,6 +45,8 @@ const products = require('./data/products');
 const stripeRoutes = require('./routes/stripe');
 const paypalRoutes = require('./routes/paypal');
 const ordersRoutes = require('./routes/orders');
+const downloadRoute = require('./routes/download');
+
 
 const PORT = Number(process.env.PORT || 5000);
 const FRONTEND_DIR = path.join(__dirname, '..', 'frontend');
@@ -93,6 +95,8 @@ app.use('/api/create-payment-intent', checkoutLimiter);
 app.use(stripeRoutes.router);
 app.use(paypalRoutes.router);
 app.use(ordersRoutes.router);
+app.use('/download', downloadRoute);
+
 
 // Public catalog (no secrets) - handy for the frontend to display prices
 // after a config refresh without re-deploying.
