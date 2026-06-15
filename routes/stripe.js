@@ -191,15 +191,40 @@ webhookRouter.post(
     }
 
     switch (event.type) {
-      case 'checkout.session.completed': {
-        const session = event.data.object;
-        orders.updateOrder(
-          { provider: 'stripe', providerOrderId: session.id },
-          { status: 'paid', paidAt: new Date().toISOString() }
-        );
-        console.log('[stripe] checkout.session.completed', session.id);
-        break;
-      }
+    
+  case 'checkout.session.completed': {
+  const session = event.data.object;
+
+  orders.updateOrder(
+    { provider: 'stripe', providerOrderId: session.id },
+    { status: 'paid', paidAt: new Date().toISOString() }
+  );
+
+  console.log('[stripe] checkout.session.completed', session.id);
+
+  try {
+    const email = session.customer_email;
+    const productKey = session.metadata?.productKey;
+
+    if (email && productKey) {
+      const link = await generateDownloadLink(productKey);
+
+      console.log('================ EMAIL =================');
+      console.log(`To: ${email}`);
+      console.log(`Subject: Your secure download link`);
+      console.log(`Link (valid 24h): ${link}`);
+      console.log('========================================');
+    } else {
+      console.log('[WARN] Missing email or productKey in session metadata');
+    }
+
+  } catch (err) {
+    console.error('[ERROR] generating download link:', err.message);
+  }
+
+  break;
+}
+        
       case 'payment_intent.succeeded': {
         const pi = event.data.object;
         orders.updateOrder(
