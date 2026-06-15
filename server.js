@@ -101,7 +101,7 @@ app.use('/download', downloadRoute);
 // Public catalog (no secrets) - handy for the frontend to display prices
 // after a config refresh without re-deploying.
 app.get('/api/products', (_req, res) => {
-  const list = products.map((p) => ({
+  const list = products.list.map((p) => ({
     id: p.id,
     name: p.name,
     description: p.description,
