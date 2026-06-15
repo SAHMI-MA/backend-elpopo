@@ -62,6 +62,20 @@ function validateOrderInput(req, res) {
   }
   return { product, name: cleanName, email: cleanEmail };
 }
+//  FONCTION : generate download link
+async function generateDownloadLink(fileKey) {
+  const jwt = require("jsonwebtoken");
+
+  const token = jwt.sign(
+    { file: fileKey },
+    process.env.DOWNLOAD_SECRET,
+    { expiresIn: "24h" }
+  );
+
+  return `${process.env.BACKEND_URL}/download/verify?token=${token}`;
+}
+
+
 
 // ----------- 1. Stripe Checkout Session (redirect flow) ---------------------
 router.post('/api/checkout/stripe', async (req, res) => {
