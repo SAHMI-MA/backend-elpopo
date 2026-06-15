@@ -15,6 +15,12 @@ const Stripe = require('stripe');
 const products = require('../data/products');
 const orders = require('./orders');
 
+// (nouveaux imports)
+const jwt = require("jsonwebtoken");
+const nodemailer = require("nodemailer");
+const axios = require("axios");
+
+
 const router = express.Router();
 const webhookRouter = express.Router();
 
