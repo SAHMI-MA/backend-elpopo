@@ -15,6 +15,7 @@ const Stripe = require('stripe');
 const products = require('../data/products');
 const orders = require('./orders');
 console.log("STRIPE KEY =", process.env.STRIPE_SECRET_KEY);
+console.log("SECRET =", process.env.STRIPE_SECRET_KEY.substring(0, 8));
 
 // (nouveaux imports)
 const jwt = require("jsonwebtoken");
