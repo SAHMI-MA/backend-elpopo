@@ -1,4 +1,4 @@
-module.exports = [
+const products = [
   {
     id: 'frame-game',
     name: 'The Frame Game',
@@ -48,3 +48,10 @@ module.exports = [
     category: 'coaching',
   },
 ];
+
+module.exports = {
+  list: products,
+  byId(id) {
+    return products.find((p) => p.id === id);
+  },
+};
