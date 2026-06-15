@@ -165,7 +165,8 @@ router.post('/api/create-payment-intent', async (req, res) => {
 
     res.json({ clientSecret: intent.client_secret });
   } catch (err) {
-    console.error('create-payment-intent error:', err && err.message);
+    console.error('create-payment-intent FULL ERROR:', err);
+    console.error('MESSAGE:', err && err.message);  
     res.status(500).json({ error: 'Could not start checkout. Please try again.' });
   }
 });
