@@ -175,7 +175,7 @@ router.post('/api/create-payment-intent', async (req, res) => {
 webhookRouter.post(
   '/webhook/stripe',
   express.raw({ type: 'application/json' }),
-  (req, res) => {
+  async (req, res) => {
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
     if (!webhookSecret) {
       console.warn('STRIPE_WEBHOOK_SECRET missing - rejecting webhook.');
