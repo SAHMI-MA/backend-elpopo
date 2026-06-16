@@ -20,6 +20,14 @@ console.log("SECRET =", process.env.STRIPE_SECRET_KEY.substring(0, 8));
 // (nouveaux imports)
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
+
+const transporter = nodemailer.createTransport({
+  service: "gmail",
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 const axios = require("axios");
 
 
