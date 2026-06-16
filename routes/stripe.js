@@ -195,7 +195,7 @@ webhookRouter.post(
 
     switch (event.type) {
     
-  case 'checkout.session.completed': {
+case 'checkout.session.completed': {
   const session = event.data.object;
 
   orders.updateOrder(
@@ -210,19 +210,45 @@ webhookRouter.post(
     const productKey = session.metadata?.productKey;
 
     if (email && productKey) {
-      const link = await generateDownloadLink(productKey);
+      // Récupération produit
+      const product = products.byId(productKey);
+      const fileKey = product?.fileKey || productKey;
 
-      console.log('================ EMAIL =================');
-      console.log(`To: ${email}`);
-      console.log(`Subject: Your secure download link`);
-      console.log(`Link (valid 24h): ${link}`);
-      console.log('========================================');
+      // Génération lien sécurisé
+      const link = await generateDownloadLink(fileKey);
+
+      // ENVOI EMAIL RÉEL
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: email,
+        subject: "Your ELPOPO Academy access link",
+        html: `
+          <div style="font-family: Arial, sans-serif; line-height:1.6;">
+            <h2>Payment confirmed ✅</h2>
+            <p>Thank you for your purchase.</p>
+            <p>Your secure download link (valid 24h):</p>
+            <p>
+              <a href="${link}" target="_blank" style="color:#d4af37;">
+                Download your product here
+              </a>
+            </p>
+            <hr />
+            <p style="font-size:12px;color:#888;">
+              If you have any issue, contact support.
+            </p>
+          </div>
+        `,
+      });
+
+      console.log('[EMAIL SENT]', email);
+      console.log('[DOWNLOAD LINK]', link);
+
     } else {
-      console.log('[WARN] Missing email or productKey in session metadata');
+      console.log('[WARN] Missing email or productKey in metadata');
     }
 
   } catch (err) {
-    console.error('[ERROR] generating download link:', err.message);
+    console.error('[ERROR] email sending failed:', err.message);
   }
 
   break;
