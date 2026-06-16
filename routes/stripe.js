@@ -1,13 +1,5 @@
 // ============================================================================
 // backend/routes/stripe.js
-// ----------------------------------------------------------------------------
-// Three things in here:
-//   1. POST /api/checkout/stripe       - create Checkout Session (redirect flow)
-//   2. POST /api/create-payment-intent - in-page Stripe Elements flow
-//   3. POST /webhook/stripe            - signature-verified webhook receiver
-//
-// The webhook needs raw body, so server.js mounts that route BEFORE the
-// global express.json() parser. The other routes use JSON.
 // ============================================================================
 
 const express = require('express');
@@ -17,19 +9,20 @@ const orders = require('./orders');
 console.log("STRIPE KEY =", process.env.STRIPE_SECRET_KEY);
 console.log("SECRET =", process.env.STRIPE_SECRET_KEY.substring(0, 8));
 
-// (nouveaux imports)
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 
+// ✅ SENDGRID — remplace Gmail
 const transporter = nodemailer.createTransport({
-  service: "gmail",
+  host: 'smtp.sendgrid.net',
+  port: 587,
   auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
+    user: 'apikey',                          // toujours "apikey" mot pour mot
+    pass: process.env.SENDGRID_API_KEY,      // votre clé SG.xxxxxxx
   },
 });
-const axios = require("axios");
 
+const axios = require("axios");
 
 const router = express.Router();
 const webhookRouter = express.Router();
@@ -40,7 +33,6 @@ function getStripe() {
   return new Stripe(key);
 }
 
-// Shared input validation for the two checkout-creation routes.
 function validateOrderInput(req, res) {
   const { productKey, name, email } = req.body || {};
   if (!productKey || typeof productKey !== 'string') {
@@ -72,20 +64,48 @@ function validateOrderInput(req, res) {
   }
   return { product, name: cleanName, email: cleanEmail };
 }
-//  FONCTION : generate download link
-async function generateDownloadLink(fileKey) {
-  const jwt = require("jsonwebtoken");
 
+async function generateDownloadLink(fileKey) {
   const token = jwt.sign(
     { file: fileKey },
     process.env.DOWNLOAD_SECRET,
     { expiresIn: "24h" }
   );
-
   return `${process.env.BACKEND_URL}/download/verify?token=${token}`;
 }
 
+// ✅ Fonction centralisée d'envoi email — utilisée par les deux events
+async function sendDownloadEmail(email, productKey) {
+  const product = products.byId(productKey);
+  const fileKey = product?.fileKey || productKey;
+  const link = await generateDownloadLink(fileKey);
 
+  await transporter.sendMail({
+    from: process.env.EMAIL_FROM,   // votre variable Railway EMAIL_FROM
+    to: email,
+    subject: "Your ELPOPO Academy access link",
+    html: `
+      <div style="font-family: Arial, sans-serif; line-height:1.6;">
+        <h2>Payment confirmed ✅</h2>
+        <p>Thank you for your purchase.</p>
+        <p>Your secure download link (valid 24h):</p>
+        <p>
+          <a href="${link}" target="_blank" style="color:#d4af37;">
+            Download your product here
+          </a>
+        </p>
+        <hr />
+        <p style="font-size:12px;color:#888;">
+          If you have any issue, contact support.
+        </p>
+      </div>
+    `,
+  });
+
+  console.log('[EMAIL SENT]', email);
+  console.log('[DOWNLOAD LINK]', link);
+  return link;
+}
 
 // ----------- 1. Stripe Checkout Session (redirect flow) ---------------------
 router.post('/api/checkout/stripe', async (req, res) => {
@@ -176,13 +196,12 @@ router.post('/api/create-payment-intent', async (req, res) => {
     res.json({ clientSecret: intent.client_secret });
   } catch (err) {
     console.error('create-payment-intent FULL ERROR:', err);
-    console.error('MESSAGE:', err && err.message);  
+    console.error('MESSAGE:', err && err.message);
     res.status(500).json({ error: 'Could not start checkout. Please try again.' });
   }
 });
 
 // ----------- 3. Webhook ----------------------------------------------------
-// Mounted by server.js with express.raw() BEFORE express.json().
 webhookRouter.post(
   '/webhook/stripe',
   express.raw({ type: 'application/json' }),
@@ -202,98 +221,52 @@ webhookRouter.post(
     }
 
     switch (event.type) {
-    
-case 'checkout.session.completed': {
-  const session = event.data.object;
 
-  orders.updateOrder(
-    { provider: 'stripe', providerOrderId: session.id },
-    { status: 'paid', paidAt: new Date().toISOString() }
-  );
+      case 'checkout.session.completed': {
+        const session = event.data.object;
+        orders.updateOrder(
+          { provider: 'stripe', providerOrderId: session.id },
+          { status: 'paid', paidAt: new Date().toISOString() }
+        );
+        console.log('[stripe] checkout.session.completed', session.id);
 
-  console.log('[stripe] checkout.session.completed', session.id);
+        try {
+          const email = session.customer_email;
+          const productKey = session.metadata?.productKey;
+          if (email && productKey) {
+            await sendDownloadEmail(email, productKey);
+          } else {
+            console.log('[WARN] Missing email or productKey in metadata');
+          }
+        } catch (err) {
+          console.error('[ERROR] email sending failed:', err.message);
+        }
+        break;
+      }
 
-  try {
-    const email = session.customer_email;
-    const productKey = session.metadata?.productKey;
+      case 'payment_intent.succeeded': {
+        const pi = event.data.object;
+        orders.updateOrder(
+          { provider: 'stripe', providerOrderId: pi.id },
+          { status: 'paid', paidAt: new Date().toISOString() }
+        );
+        console.log('[stripe] payment_intent.succeeded', pi.id);
 
-    if (email && productKey) {
-      // Récupération produit
-      const product = products.byId(productKey);
-      const fileKey = product?.fileKey || productKey;
+        try {
+          const email = pi.receipt_email || pi.metadata?.email;
+          const productKey = pi.metadata?.productKey;
+          if (email && productKey) {
+            // ✅ Envoi email réel (était seulement console.log avant !)
+            await sendDownloadEmail(email, productKey);
+          } else {
+            console.log('[WARN] Missing email or productKey');
+          }
+        } catch (err) {
+          console.error('[ERROR] generating/sending download link:', err.message);
+        }
+        break;
+      }
 
-      // Génération lien sécurisé
-      const link = await generateDownloadLink(fileKey);
-
-      // ENVOI EMAIL RÉEL
-      await transporter.sendMail({
-        from: process.env.EMAIL_USER,
-        to: email,
-        subject: "Your ELPOPO Academy access link",
-        html: `
-          <div style="font-family: Arial, sans-serif; line-height:1.6;">
-            <h2>Payment confirmed ✅</h2>
-            <p>Thank you for your purchase.</p>
-            <p>Your secure download link (valid 24h):</p>
-            <p>
-              <a href="${link}" target="_blank" style="color:#d4af37;">
-                Download your product here
-              </a>
-            </p>
-            <hr />
-            <p style="font-size:12px;color:#888;">
-              If you have any issue, contact support.
-            </p>
-          </div>
-        `,
-      });
-
-      console.log('[EMAIL SENT]', email);
-      console.log('[DOWNLOAD LINK]', link);
-
-    } else {
-      console.log('[WARN] Missing email or productKey in metadata');
-    }
-
-  } catch (err) {
-    console.error('[ERROR] email sending failed:', err.message);
-  }
-
-  break;
-}
-        
-case 'payment_intent.succeeded': {
-  const pi = event.data.object;
-
-  orders.updateOrder(
-    { provider: 'stripe', providerOrderId: pi.id },
-    { status: 'paid', paidAt: new Date().toISOString() }
-  );
-
-  console.log('[stripe] payment_intent.succeeded', pi.id);
-
-  try {
-    const email = pi.receipt_email || pi.metadata?.email;
-    const productKey = pi.metadata?.productKey;
-
-    if (email && productKey) {
-      const link = await generateDownloadLink(productKey);
-
-      console.log('================ EMAIL =================');
-      console.log(`To: ${email}`);
-      console.log(`Subject: Your secure download link`);
-      console.log(`Link (valid 24h): ${link}`);
-      console.log('========================================');
-    } else {
-      console.log('[WARN] Missing email or productKey');
-    }
-  } catch (err) {
-    console.error('[ERROR] generating download link:', err.message);
-  }
-
-  break;
-}
-        
       case 'payment_intent.payment_failed': {
         const pi = event.data.object;
         orders.updateOrder(
@@ -303,13 +276,16 @@ case 'payment_intent.succeeded': {
         console.log('[stripe] payment_intent.payment_failed', pi.id);
         break;
       }
+
       case 'charge.refunded': {
         console.log('[stripe] charge.refunded', event.data.object.id);
         break;
       }
+
       default:
         console.log('[stripe] unhandled event', event.type);
     }
+
     res.json({ received: true });
   }
 );
