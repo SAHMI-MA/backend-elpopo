@@ -228,15 +228,38 @@ webhookRouter.post(
   break;
 }
         
-      case 'payment_intent.succeeded': {
-        const pi = event.data.object;
-        orders.updateOrder(
-          { provider: 'stripe', providerOrderId: pi.id },
-          { status: 'paid', paidAt: new Date().toISOString() }
-        );
-        console.log('[stripe] payment_intent.succeeded', pi.id);
-        break;
-      }
+case 'payment_intent.succeeded': {
+  const pi = event.data.object;
+
+  orders.updateOrder(
+    { provider: 'stripe', providerOrderId: pi.id },
+    { status: 'paid', paidAt: new Date().toISOString() }
+  );
+
+  console.log('[stripe] payment_intent.succeeded', pi.id);
+
+  try {
+    const email = pi.receipt_email || pi.metadata?.email;
+    const productKey = pi.metadata?.productKey;
+
+    if (email && productKey) {
+      const link = await generateDownloadLink(productKey);
+
+      console.log('================ EMAIL =================');
+      console.log(`To: ${email}`);
+      console.log(`Subject: Your secure download link`);
+      console.log(`Link (valid 24h): ${link}`);
+      console.log('========================================');
+    } else {
+      console.log('[WARN] Missing email or productKey');
+    }
+  } catch (err) {
+    console.error('[ERROR] generating download link:', err.message);
+  }
+
+  break;
+}
+        
       case 'payment_intent.payment_failed': {
         const pi = event.data.object;
         orders.updateOrder(
