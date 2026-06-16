@@ -81,7 +81,7 @@ async function sendDownloadEmail(email, productKey) {
   const link = await generateDownloadLink(fileKey);
 
   await transporter.sendMail({
-    from: process.env.EMAIL_FROM,   // votre variable Railway EMAIL_FROM
+    from: process.env.EMAIL_FROM,
     to: email,
     subject: "Your ELPOPO Academy access link",
     html: `
@@ -201,93 +201,97 @@ router.post('/api/create-payment-intent', async (req, res) => {
   }
 });
 
-// ----------- 3. Webhook ----------------------------------------------------
+// ----------- 3. Webhook handler (exporté pour server.js) -------------------
+async function handleWebhook(req, res) {
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.warn('STRIPE_WEBHOOK_SECRET missing - rejecting webhook.');
+    return res.status(500).send('Webhook secret not configured.');
+  }
+  const sig = req.headers['stripe-signature'];
+  let event;
+  try {
+    event = getStripe().webhooks.constructEvent(req.body, sig, webhookSecret);
+  } catch (err) {
+    console.error('Stripe webhook signature failed:', err.message);
+    return res.status(400).send('Webhook Error: ' + err.message);
+  }
+
+  console.log('[stripe] event reçu:', event.type);
+
+  switch (event.type) {
+
+    case 'checkout.session.completed': {
+      const session = event.data.object;
+      orders.updateOrder(
+        { provider: 'stripe', providerOrderId: session.id },
+        { status: 'paid', paidAt: new Date().toISOString() }
+      );
+      console.log('[stripe] checkout.session.completed', session.id);
+
+      try {
+        const email = session.customer_email;
+        const productKey = session.metadata?.productKey;
+        if (email && productKey) {
+          await sendDownloadEmail(email, productKey);
+        } else {
+          console.log('[WARN] Missing email or productKey in metadata');
+        }
+      } catch (err) {
+        console.error('[ERROR] email sending failed:', err.message);
+      }
+      break;
+    }
+
+    case 'payment_intent.succeeded': {
+      const pi = event.data.object;
+      orders.updateOrder(
+        { provider: 'stripe', providerOrderId: pi.id },
+        { status: 'paid', paidAt: new Date().toISOString() }
+      );
+      console.log('[stripe] payment_intent.succeeded', pi.id);
+
+      try {
+        const email = pi.receipt_email || pi.metadata?.email;
+        const productKey = pi.metadata?.productKey;
+        if (email && productKey) {
+          await sendDownloadEmail(email, productKey);
+        } else {
+          console.log('[WARN] Missing email or productKey');
+        }
+      } catch (err) {
+        console.error('[ERROR] generating/sending download link:', err.message);
+      }
+      break;
+    }
+
+    case 'payment_intent.payment_failed': {
+      const pi = event.data.object;
+      orders.updateOrder(
+        { provider: 'stripe', providerOrderId: pi.id },
+        { status: 'failed' }
+      );
+      console.log('[stripe] payment_intent.payment_failed', pi.id);
+      break;
+    }
+
+    case 'charge.refunded': {
+      console.log('[stripe] charge.refunded', event.data.object.id);
+      break;
+    }
+
+    default:
+      console.log('[stripe] unhandled event', event.type);
+  }
+
+  res.json({ received: true });
+}
+
+// Garde webhookRouter pour compatibilité (non utilisé dans server.js corrigé)
 webhookRouter.post(
   '/webhook/stripe',
   express.raw({ type: 'application/json' }),
-  async (req, res) => {
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-    if (!webhookSecret) {
-      console.warn('STRIPE_WEBHOOK_SECRET missing - rejecting webhook.');
-      return res.status(500).send('Webhook secret not configured.');
-    }
-    const sig = req.headers['stripe-signature'];
-    let event;
-    try {
-      event = getStripe().webhooks.constructEvent(req.body, sig, webhookSecret);
-    } catch (err) {
-      console.error('Stripe webhook signature failed:', err.message);
-      return res.status(400).send('Webhook Error: ' + err.message);
-    }
-
-    switch (event.type) {
-
-      case 'checkout.session.completed': {
-        const session = event.data.object;
-        orders.updateOrder(
-          { provider: 'stripe', providerOrderId: session.id },
-          { status: 'paid', paidAt: new Date().toISOString() }
-        );
-        console.log('[stripe] checkout.session.completed', session.id);
-
-        try {
-          const email = session.customer_email;
-          const productKey = session.metadata?.productKey;
-          if (email && productKey) {
-            await sendDownloadEmail(email, productKey);
-          } else {
-            console.log('[WARN] Missing email or productKey in metadata');
-          }
-        } catch (err) {
-          console.error('[ERROR] email sending failed:', err.message);
-        }
-        break;
-      }
-
-      case 'payment_intent.succeeded': {
-        const pi = event.data.object;
-        orders.updateOrder(
-          { provider: 'stripe', providerOrderId: pi.id },
-          { status: 'paid', paidAt: new Date().toISOString() }
-        );
-        console.log('[stripe] payment_intent.succeeded', pi.id);
-
-        try {
-          const email = pi.receipt_email || pi.metadata?.email;
-          const productKey = pi.metadata?.productKey;
-          if (email && productKey) {
-            // ✅ Envoi email réel (était seulement console.log avant !)
-            await sendDownloadEmail(email, productKey);
-          } else {
-            console.log('[WARN] Missing email or productKey');
-          }
-        } catch (err) {
-          console.error('[ERROR] generating/sending download link:', err.message);
-        }
-        break;
-      }
-
-      case 'payment_intent.payment_failed': {
-        const pi = event.data.object;
-        orders.updateOrder(
-          { provider: 'stripe', providerOrderId: pi.id },
-          { status: 'failed' }
-        );
-        console.log('[stripe] payment_intent.payment_failed', pi.id);
-        break;
-      }
-
-      case 'charge.refunded': {
-        console.log('[stripe] charge.refunded', event.data.object.id);
-        break;
-      }
-
-      default:
-        console.log('[stripe] unhandled event', event.type);
-    }
-
-    res.json({ received: true });
-  }
+  handleWebhook
 );
 
-module.exports = { router, webhookRouter };
+module.exports = { router, webhookRouter, handleWebhook };
