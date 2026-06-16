@@ -6,30 +6,25 @@ const express = require('express');
 const Stripe = require('stripe');
 const products = require('../data/products');
 const orders = require('./orders');
-console.log("STRIPE KEY =", process.env.STRIPE_SECRET_KEY);
-console.log("SECRET =", process.env.STRIPE_SECRET_KEY.substring(0, 8));
-
 const jwt = require("jsonwebtoken");
 const nodemailer = require("nodemailer");
 
-// ✅ SENDGRID — remplace Gmail
+// ✅ SENDGRID
 const transporter = nodemailer.createTransport({
   host: 'smtp.sendgrid.net',
   port: 587,
   auth: {
-    user: 'apikey',                          // toujours "apikey" mot pour mot
-    pass: process.env.SENDGRID_API_KEY,      // votre clé SG.xxxxxxx
+    user: 'apikey',
+    pass: process.env.SENDGRID_API_KEY,
   },
 });
-
-const axios = require("axios");
 
 const router = express.Router();
 const webhookRouter = express.Router();
 
 function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) throw new Error('STRIPE_SECRET_KEY missing - check backend/.env');
+  if (!key) throw new Error('STRIPE_SECRET_KEY missing - check Railway Variables');
   return new Stripe(key);
 }
 
@@ -66,15 +61,17 @@ function validateOrderInput(req, res) {
 }
 
 async function generateDownloadLink(fileKey) {
+  const secret = process.env.DOWNLOAD_SECRET;
+  if (!secret) throw new Error('DOWNLOAD_SECRET missing - check Railway Variables');
   const token = jwt.sign(
     { file: fileKey },
-    process.env.DOWNLOAD_SECRET,
+    secret,
     { expiresIn: "24h" }
   );
-  return `${process.env.BACKEND_URL}/download/verify?token=${token}`;
+  const backendUrl = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
+  return `${backendUrl}/download/verify?token=${token}`;
 }
 
-// ✅ Fonction centralisée d'envoi email — utilisée par les deux events
 async function sendDownloadEmail(email, productKey) {
   const product = products.byId(productKey);
   const fileKey = product?.fileKey || productKey;
@@ -195,13 +192,12 @@ router.post('/api/create-payment-intent', async (req, res) => {
 
     res.json({ clientSecret: intent.client_secret });
   } catch (err) {
-    console.error('create-payment-intent FULL ERROR:', err);
-    console.error('MESSAGE:', err && err.message);
+    console.error('create-payment-intent error:', err && err.message);
     res.status(500).json({ error: 'Could not start checkout. Please try again.' });
   }
 });
 
-// ----------- 3. Webhook handler (exporté pour server.js) -------------------
+// ----------- 3. Webhook handler ---------------------------------------------
 async function handleWebhook(req, res) {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!webhookSecret) {
@@ -228,14 +224,13 @@ async function handleWebhook(req, res) {
         { status: 'paid', paidAt: new Date().toISOString() }
       );
       console.log('[stripe] checkout.session.completed', session.id);
-
       try {
         const email = session.customer_email;
         const productKey = session.metadata?.productKey;
         if (email && productKey) {
           await sendDownloadEmail(email, productKey);
         } else {
-          console.log('[WARN] Missing email or productKey in metadata');
+          console.warn('[WARN] Missing email or productKey in session metadata');
         }
       } catch (err) {
         console.error('[ERROR] email sending failed:', err.message);
@@ -250,14 +245,13 @@ async function handleWebhook(req, res) {
         { status: 'paid', paidAt: new Date().toISOString() }
       );
       console.log('[stripe] payment_intent.succeeded', pi.id);
-
       try {
         const email = pi.receipt_email || pi.metadata?.email;
         const productKey = pi.metadata?.productKey;
         if (email && productKey) {
           await sendDownloadEmail(email, productKey);
         } else {
-          console.log('[WARN] Missing email or productKey');
+          console.warn('[WARN] Missing email or productKey in payment_intent metadata');
         }
       } catch (err) {
         console.error('[ERROR] generating/sending download link:', err.message);
@@ -281,13 +275,13 @@ async function handleWebhook(req, res) {
     }
 
     default:
-      console.log('[stripe] unhandled event', event.type);
+      console.log('[stripe] unhandled event:', event.type);
   }
 
   res.json({ received: true });
 }
 
-// Garde webhookRouter pour compatibilité (non utilisé dans server.js corrigé)
+// Webhook router (compatibilité)
 webhookRouter.post(
   '/webhook/stripe',
   express.raw({ type: 'application/json' }),
