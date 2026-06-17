@@ -1,5 +1,5 @@
 // ============================================================================
-// backend/routes/stripe.js (CLEAN PRODUCTION VERSION)
+// backend/routes/stripe.js (FIXED SAFE VERSION)
 // ============================================================================
 
 const express = require('express');
@@ -7,20 +7,15 @@ const Stripe = require('stripe');
 const products = require('../data/products');
 const orders = require('./orders');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
+
+// 🔥 FIX IMPORTANT: on remplace SMTP par SendGrid API
+const sgMail = require('@sendgrid/mail');
 
 const router = express.Router();
 const webhookRouter = express.Router();
 
-// ======================= SENDGRID =======================
-const transporter = nodemailer.createTransport({
-  host: 'smtp.sendgrid.net',
-  port: 587,
-  auth: {
-    user: 'apikey',
-    pass: process.env.SENDGRID_API_KEY,
-  },
-});
+// ======================= SENDGRID API =======================
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // ======================= STRIPE =======================
 function getStripe() {
@@ -54,9 +49,9 @@ async function sendDownloadEmail(email, productKey) {
 
   console.log('[MAIL] LINK READY');
 
-  const mailOptions = {
-    from: "contact@sahmi.ma",
+  const msg = {
     to: email,
+    from: "contact@sahmi.ma",
     subject: "Your access link",
     html: `
       <h2>Payment confirmed ✅</h2>
@@ -69,15 +64,16 @@ async function sendDownloadEmail(email, productKey) {
   console.log('[MAIL] SENDING TO:', email);
 
   try {
-    const result = await transporter.sendMail(mailOptions);
+    const result = await sgMail.send(msg);
 
     console.log('[MAIL][SUCCESS]');
-    console.log('[MAIL] messageId:', result.messageId);
+    console.log('[MAIL] status:', result[0]?.statusCode);
 
     return link;
 
   } catch (err) {
-    console.error('[MAIL][ERROR]', err.message);
+    console.error('[MAIL][ERROR]');
+    console.error(err.response?.body || err.message);
     throw err;
   }
 }
@@ -172,7 +168,6 @@ async function handleWebhook(req, res) {
 
   res.json({ received: true });
 
-  // 🔥 SAFE BACKGROUND EXECUTION
   setImmediate(async () => {
     try {
 
@@ -181,8 +176,6 @@ async function handleWebhook(req, res) {
 
         const email = pi.metadata?.email;
         const productKey = pi.metadata?.productKey;
-
-        console.log('[DEBUG] email:', email);
 
         if (!email || !productKey) return;
 
