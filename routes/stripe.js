@@ -216,12 +216,16 @@ async function handleWebhook(req, res) {
 
   console.log('[stripe] event reçu:', event.type);
 
-  // ✅ RÉPONDRE IMMÉDIATEMENT à Stripe (évite le timeout 499)
-  res.json({ received: true });
+ // ✅ RÉPONDRE IMMÉDIATEMENT à Stripe
+res.json({ received: true });
 
-  // ✅ Traiter l'événement APRÈS la réponse
-  try {
-    switch (event.type) {
+// 🔍 DEBUG TEMPORAIRE
+console.log('[DEBUG] event.type =', event.type);
+console.log('[DEBUG] event.data.object =', JSON.stringify(event.data.object).substring(0, 300));
+
+// ✅ Traiter l'événement APRÈS
+try {
+  switch (event.type) {
 
       case 'checkout.session.completed': {
         const session = event.data.object;
