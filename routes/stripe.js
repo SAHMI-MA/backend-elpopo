@@ -1,5 +1,5 @@
 // ============================================================================
-// backend/routes/stripe.js (PRODUCTION FIXED FULL VERSION)
+// backend/routes/stripe.js (STABLE PRODUCTION VERSION)
 // ============================================================================
 
 const express = require('express');
@@ -15,14 +15,14 @@ const webhookRouter = express.Router();
 // ======================= SENDGRID =======================
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-// ======================= STRIPE INIT =======================
+// ======================= STRIPE =======================
 function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY;
   if (!key) throw new Error('STRIPE_SECRET_KEY missing');
   return new Stripe(key);
 }
 
-// ======================= VALIDATION =======================
+// ======================= INPUT VALIDATION =======================
 function validateInput(req, res) {
   const { productKey, name, email } = req.body || {};
 
@@ -39,6 +39,7 @@ function validateInput(req, res) {
 
   return {
     product,
+    productKey,
     name: name.trim(),
     email: email.trim(),
   };
@@ -56,7 +57,7 @@ async function generateDownloadLink(fileKey) {
   return `${baseUrl}/download/verify?token=${token}`;
 }
 
-// ======================= SEND EMAIL =======================
+// ======================= EMAIL =======================
 async function sendDownloadEmail(email, productKey) {
   console.log('[MAIL] START', email, productKey);
 
@@ -67,16 +68,14 @@ async function sendDownloadEmail(email, productKey) {
 
   const link = await generateDownloadLink(fileKey);
 
-  console.log('[MAIL] LINK GENERATED');
-
   const msg = {
     to: email,
     from: "contact@sahmi.ma",
-    subject: "Your ELPOPO Academy access",
+    subject: "Your access link",
     html: `
       <h2>Payment confirmed ✅</h2>
-      <p>Your download link is ready:</p>
-      <a href="${link}">Download your product</a>
+      <p>Your download link:</p>
+      <a href="${link}">Download</a>
       <p>Valid 24h</p>
     `,
   };
@@ -85,26 +84,21 @@ async function sendDownloadEmail(email, productKey) {
 
   try {
     const result = await sgMail.send(msg);
-
-    console.log('[MAIL][SUCCESS]');
-    console.log('[MAIL] status:', result[0]?.statusCode);
-
+    console.log('[MAIL][SUCCESS]', result[0]?.statusCode);
     return link;
-
   } catch (err) {
-    console.error('[MAIL][ERROR]');
-    console.error(err.response?.body || err.message);
+    console.error('[MAIL][ERROR]', err.response?.body || err.message);
     throw err;
   }
 }
 
-// ======================= STRIPE CHECKOUT =======================
+// ======================= CHECKOUT SESSION =======================
 router.post('/api/checkout/stripe', async (req, res) => {
   try {
     const v = validateInput(req, res);
     if (!v) return;
 
-    const { product, name, email } = v;
+    const { product, productKey, name, email } = v;
     const stripe = getStripe();
 
     const session = await stripe.checkout.sessions.create({
@@ -135,7 +129,11 @@ router.post('/api/checkout/stripe', async (req, res) => {
     orders.saveOrder({
       provider: 'stripe',
       providerOrderId: session.id,
-      productKey: product.id,
+      productKey,
+      productName: product.name,
+      amountCents: product.amountCents,
+      currency: product.currency || 'usd',
+      customer: { name, email },
       status: 'pending',
     });
 
@@ -153,7 +151,7 @@ router.post('/api/create-payment-intent', async (req, res) => {
     const v = validateInput(req, res);
     if (!v) return;
 
-    const { product, name, email } = v;
+    const { product, productKey, name, email } = v;
     const stripe = getStripe();
 
     const intent = await stripe.paymentIntents.create({
@@ -161,7 +159,7 @@ router.post('/api/create-payment-intent', async (req, res) => {
       currency: product.currency || 'usd',
       receipt_email: email,
       metadata: {
-        productKey: product.id,
+        productKey,
         email,
         customerName: name,
       },
@@ -193,7 +191,6 @@ async function handleWebhook(req, res) {
 
   res.json({ received: true });
 
-  // SAFE BACKGROUND EXECUTION
   setImmediate(async () => {
     try {
 
@@ -202,8 +199,6 @@ async function handleWebhook(req, res) {
 
         const email = pi.metadata?.email;
         const productKey = pi.metadata?.productKey;
-
-        console.log('[DEBUG EMAIL]', email);
 
         if (!email || !productKey) return;
 
