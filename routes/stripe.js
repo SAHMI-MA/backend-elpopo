@@ -204,6 +204,7 @@ async function handleWebhook(req, res) {
     console.warn('STRIPE_WEBHOOK_SECRET missing - rejecting webhook.');
     return res.status(500).send('Webhook secret not configured.');
   }
+
   const sig = req.headers['stripe-signature'];
   let event;
   try {
@@ -215,70 +216,68 @@ async function handleWebhook(req, res) {
 
   console.log('[stripe] event reçu:', event.type);
 
-  switch (event.type) {
+  // ✅ RÉPONDRE IMMÉDIATEMENT à Stripe (évite le timeout 499)
+  res.json({ received: true });
 
-    case 'checkout.session.completed': {
-      const session = event.data.object;
-      orders.updateOrder(
-        { provider: 'stripe', providerOrderId: session.id },
-        { status: 'paid', paidAt: new Date().toISOString() }
-      );
-      console.log('[stripe] checkout.session.completed', session.id);
-      try {
-        const email = session.customer_email;
-        const productKey = session.metadata?.productKey;
-        if (email && productKey) {
-          await sendDownloadEmail(email, productKey);
+  // ✅ Traiter l'événement APRÈS la réponse
+  try {
+    switch (event.type) {
+
+      case 'checkout.session.completed': {
+        const session = event.data.object;
+        orders.updateOrder(
+          { provider: 'stripe', providerOrderId: session.id },
+          { status: 'paid', paidAt: new Date().toISOString() }
+        );
+        console.log('[stripe] checkout.session.completed', session.id);
+        const emailSession = session.customer_email;
+        const productKeySession = session.metadata?.productKey;
+        if (emailSession && productKeySession) {
+          await sendDownloadEmail(emailSession, productKeySession);
         } else {
           console.warn('[WARN] Missing email or productKey in session metadata');
         }
-      } catch (err) {
-        console.error('[ERROR] email sending failed:', err.message);
+        break;
       }
-      break;
-    }
 
-    case 'payment_intent.succeeded': {
-      const pi = event.data.object;
-      orders.updateOrder(
-        { provider: 'stripe', providerOrderId: pi.id },
-        { status: 'paid', paidAt: new Date().toISOString() }
-      );
-      console.log('[stripe] payment_intent.succeeded', pi.id);
-      try {
-        const email = pi.receipt_email || pi.metadata?.email;
-        const productKey = pi.metadata?.productKey;
-        if (email && productKey) {
-          await sendDownloadEmail(email, productKey);
+      case 'payment_intent.succeeded': {
+        const pi = event.data.object;
+        orders.updateOrder(
+          { provider: 'stripe', providerOrderId: pi.id },
+          { status: 'paid', paidAt: new Date().toISOString() }
+        );
+        console.log('[stripe] payment_intent.succeeded', pi.id);
+        const emailPi = pi.receipt_email || pi.metadata?.email;
+        const productKeyPi = pi.metadata?.productKey;
+        if (emailPi && productKeyPi) {
+          await sendDownloadEmail(emailPi, productKeyPi);
         } else {
           console.warn('[WARN] Missing email or productKey in payment_intent metadata');
         }
-      } catch (err) {
-        console.error('[ERROR] generating/sending download link:', err.message);
+        break;
       }
-      break;
-    }
 
-    case 'payment_intent.payment_failed': {
-      const pi = event.data.object;
-      orders.updateOrder(
-        { provider: 'stripe', providerOrderId: pi.id },
-        { status: 'failed' }
-      );
-      console.log('[stripe] payment_intent.payment_failed', pi.id);
-      break;
-    }
+      case 'payment_intent.payment_failed': {
+        const pi = event.data.object;
+        orders.updateOrder(
+          { provider: 'stripe', providerOrderId: pi.id },
+          { status: 'failed' }
+        );
+        console.log('[stripe] payment_intent.payment_failed', pi.id);
+        break;
+      }
 
-    case 'charge.refunded': {
-      console.log('[stripe] charge.refunded', event.data.object.id);
-      break;
-    }
+      case 'charge.refunded': {
+        console.log('[stripe] charge.refunded', event.data.object.id);
+        break;
+      }
 
-    default:
-      console.log('[stripe] unhandled event:', event.type);
+      default:
+        console.log('[stripe] unhandled event:', event.type);
+    }
+  } catch (err) {
+    console.error('[ERROR] webhook processing failed:', err.message);
   }
-
-  res.json({ received: true });
 }
 
 // Webhook router (compatibilité)
