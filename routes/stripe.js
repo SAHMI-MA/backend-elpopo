@@ -109,7 +109,8 @@ async function sendDownloadEmail(email, productKey) {
   try {
     console.log('[MAIL] attempting transporter.sendMail() ->', email);
     const info = await transporter.sendMail({
-      from: process.env.EMAIL_FROM,
+   //   from: process.env.EMAIL_FROM,
+      from: "contact@sahmi.ma",
       to: email,
       subject: 'Your ELPOPO Academy access link',
       html: `
