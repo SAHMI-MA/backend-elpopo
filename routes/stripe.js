@@ -1,26 +1,16 @@
 // ============================================================================
-// backend/routes/stripe.js (PRODUCTION FIXED VERSION)
+// backend/routes/stripe.js
 // ============================================================================
 
 const express = require('express');
 const Stripe = require('stripe');
+const sgMail = require('@sendgrid/mail');
 const products = require('../data/products');
 const orders = require('./orders');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
 
 const router = express.Router();
 const webhookRouter = express.Router();
-
-// ======================= SENDGRID TRANSPORT =======================
-const transporter = nodemailer.createTransport({
-  host: 'smtp.sendgrid.net',
-  port: 587,
-  auth: {
-    user: 'apikey',
-    pass: process.env.SENDGRID_API_KEY,
-  },
-});
 
 // ======================= STRIPE INIT =======================
 function getStripe() {
@@ -68,38 +58,40 @@ async function generateDownloadLink(fileKey) {
   return `${baseUrl}/download/verify?token=${token}`;
 }
 
-// ======================= SEND EMAIL =======================
+// ======================= SEND EMAIL (SendGrid HTTP API) =======================
 async function sendDownloadEmail(email, productKey) {
   console.log('[MAIL] START', email, productKey);
 
-  if (!process.env.SENDGRID_API_KEY) throw new Error('SENDGRID_API_KEY missing');
+  const apiKey = process.env.SENDGRID_API_KEY;
+  if (!apiKey) throw new Error('SENDGRID_API_KEY missing');
 
   const product = products.byId(productKey);
   if (!product) throw new Error('Invalid productKey');
 
   const fileKey = product.fileKey || productKey;
-
-  let link = await generateDownloadLink(fileKey);
+  const link = await generateDownloadLink(fileKey);
 
   console.log('[MAIL] LINK OK:', link);
 
-  const mailOptions = {
-    from: "contact@sahmi.ma",
+  sgMail.setApiKey(apiKey);
+
+  const msg = {
+    from: 'contact@sahmi.ma',
     to: email,
-    subject: "Your download is ready",
+    subject: 'Your download is ready',
     html: `
       <h2>Payment confirmed ✅</h2>
       <p>Here is your access link:</p>
       <a href="${link}">Download your product</a>
-      <p>This link expires in 24h</p>
+      <p>This link expires in 24h.</p>
     `,
   };
 
   console.log('[MAIL] SENDING TO:', email);
 
-  const result = await transporter.sendMail(mailOptions);
+  const [response] = await sgMail.send(msg);
 
-  console.log('[MAIL] SENT OK:', result.messageId);
+  console.log('[MAIL] SENT OK — status:', response.statusCode);
 
   return link;
 }
@@ -147,7 +139,7 @@ router.post('/api/checkout/stripe', async (req, res) => {
 
     res.json({ id: session.id, url: session.url });
   } catch (err) {
-    console.error(err);
+    console.error('[CHECKOUT ERROR]', err.message);
     res.status(500).json({ error: 'checkout error' });
   }
 });
@@ -174,7 +166,7 @@ router.post('/api/create-payment-intent', async (req, res) => {
 
     res.json({ clientSecret: intent.client_secret });
   } catch (err) {
-    console.error(err);
+    console.error('[PAYMENT INTENT ERROR]', err.message);
     res.status(500).json({ error: 'payment intent error' });
   }
 });
@@ -182,7 +174,6 @@ router.post('/api/create-payment-intent', async (req, res) => {
 // ======================= WEBHOOK =======================
 async function handleWebhook(req, res) {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
-
   const sig = req.headers['stripe-signature'];
 
   let event;
@@ -190,15 +181,15 @@ async function handleWebhook(req, res) {
   try {
     event = getStripe().webhooks.constructEvent(req.body, sig, secret);
   } catch (err) {
-    console.error('Webhook error:', err.message);
+    console.error('[WEBHOOK] Signature error:', err.message);
     return res.status(400).send('Webhook error');
   }
 
   console.log('[STRIPE EVENT]', event.type);
 
+  // Respond to Stripe immediately — processing happens in background
   res.json({ received: true });
 
-  // 🔥 SAFE BACKGROUND EXECUTION
   setImmediate(async () => {
     try {
       switch (event.type) {
@@ -206,36 +197,46 @@ async function handleWebhook(req, res) {
         // ================= PAYMENT INTENT =================
         case 'payment_intent.succeeded': {
           const pi = event.data.object;
-
           const email = pi.metadata?.email;
           const productKey = pi.metadata?.productKey;
 
-          console.log('[DEBUG] PI email:', email);
+          console.log('[DEBUG] PI email:', email, '| productKey:', productKey);
 
-          if (!email || !productKey) return;
+          if (!email || !productKey) {
+            console.warn('[WEBHOOK] Missing email or productKey in payment_intent metadata');
+            return;
+          }
 
           await sendDownloadEmail(email, productKey);
           break;
         }
 
-        // ================= CHECKOUT =================
+        // ================= CHECKOUT SESSION =================
         case 'checkout.session.completed': {
           const session = event.data.object;
-
           const email = session.metadata?.email;
           const productKey = session.metadata?.productKey;
 
-          if (!email || !productKey) return;
+          console.log('[DEBUG] Checkout email:', email, '| productKey:', productKey);
+
+          if (!email || !productKey) {
+            console.warn('[WEBHOOK] Missing email or productKey in checkout.session metadata');
+            return;
+          }
 
           await sendDownloadEmail(email, productKey);
           break;
         }
 
         default:
-          console.log('[STRIPE] ignored:', event.type);
+          console.log('[STRIPE] Ignored event:', event.type);
       }
     } catch (err) {
       console.error('[WEBHOOK ERROR]', err.message);
+      // Log SendGrid-specific error body if available
+      if (err.response?.body) {
+        console.error('[SENDGRID ERROR BODY]', JSON.stringify(err.response.body, null, 2));
+      }
     }
   });
 }
