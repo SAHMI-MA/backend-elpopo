@@ -1,26 +1,15 @@
-// ============================================================================
-// backend/routes/stripe.js (CLEAN PRODUCTION VERSION)
-// ============================================================================
-
 const express = require('express');
 const Stripe = require('stripe');
 const products = require('../data/products');
 const orders = require('./orders');
 const jwt = require('jsonwebtoken');
-const nodemailer = require('nodemailer');
+const sgMail = require('@sendgrid/mail');
 
 const router = express.Router();
 const webhookRouter = express.Router();
 
-// ======================= SENDGRID =======================
-const transporter = nodemailer.createTransport({
-  host: 'smtp.sendgrid.net',
-  port: 587,
-  auth: {
-    user: 'apikey',
-    pass: process.env.SENDGRID_API_KEY,
-  },
-});
+// ======================= SENDGRID API (FIX IMPORTANT) =======================
+sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // ======================= STRIPE =======================
 function getStripe() {
@@ -54,105 +43,34 @@ async function sendDownloadEmail(email, productKey) {
 
   console.log('[MAIL] LINK READY');
 
-  const mailOptions = {
-    from: "contact@sahmi.ma",
+  const msg = {
     to: email,
+    from: "contact@sahmi.ma",
     subject: "Your access link",
     html: `
       <h2>Payment confirmed ✅</h2>
       <p>Here is your download link:</p>
-      <a href="${link}">Download</a>
-      <p>Valid 24h</p>
+      <a href="${link}">Download your product</a>
+      <p>Valid for 24h</p>
     `,
   };
 
   console.log('[MAIL] SENDING TO:', email);
 
   try {
-    const result = await transporter.sendMail(mailOptions);
+    const result = await sgMail.send(msg);
 
     console.log('[MAIL][SUCCESS]');
-    console.log('[MAIL] messageId:', result.messageId);
+    console.log('[MAIL] response:', result[0]?.statusCode);
 
     return link;
 
   } catch (err) {
-    console.error('[MAIL][ERROR]', err.message);
+    console.error('[MAIL][ERROR]');
+    console.error(err.response?.body || err.message);
     throw err;
   }
 }
-
-// ======================= CHECKOUT =======================
-router.post('/api/checkout/stripe', async (req, res) => {
-  try {
-    const { productKey, name, email } = req.body;
-
-    const product = products.byId(productKey);
-    if (!product) return res.status(400).json({ error: 'Invalid product' });
-
-    const stripe = getStripe();
-
-    const session = await stripe.checkout.sessions.create({
-      mode: 'payment',
-      payment_method_types: ['card'],
-      customer_email: email,
-      line_items: [
-        {
-          quantity: 1,
-          price_data: {
-            currency: product.currency || 'usd',
-            unit_amount: product.amountCents,
-            product_data: {
-              name: product.name,
-            },
-          },
-        },
-      ],
-      success_url: process.env.SUCCESS_URL,
-      cancel_url: process.env.CANCEL_URL,
-      metadata: {
-        productKey,
-        email,
-        customerName: name,
-      },
-    });
-
-    res.json({ id: session.id, url: session.url });
-
-  } catch (err) {
-    console.error('[CHECKOUT ERROR]', err.message);
-    res.status(500).json({ error: 'checkout failed' });
-  }
-});
-
-// ======================= PAYMENT INTENT =======================
-router.post('/api/create-payment-intent', async (req, res) => {
-  try {
-    const { productKey, name, email } = req.body;
-
-    const product = products.byId(productKey);
-    if (!product) return res.status(400).json({ error: 'Invalid product' });
-
-    const stripe = getStripe();
-
-    const intent = await stripe.paymentIntents.create({
-      amount: product.amountCents,
-      currency: product.currency || 'usd',
-      receipt_email: email,
-      metadata: {
-        productKey,
-        email,
-        customerName: name,
-      },
-    });
-
-    res.json({ clientSecret: intent.client_secret });
-
-  } catch (err) {
-    console.error('[PI ERROR]', err.message);
-    res.status(500).json({ error: 'payment intent failed' });
-  }
-});
 
 // ======================= WEBHOOK =======================
 async function handleWebhook(req, res) {
@@ -172,7 +90,7 @@ async function handleWebhook(req, res) {
 
   res.json({ received: true });
 
-  // 🔥 SAFE BACKGROUND EXECUTION
+  // 🔥 background safe execution
   setImmediate(async () => {
     try {
 
