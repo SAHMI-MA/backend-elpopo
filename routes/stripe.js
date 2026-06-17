@@ -6,8 +6,8 @@ const express = require('express');
 const Stripe = require('stripe');
 const products = require('../data/products');
 const orders = require('./orders');
-const jwt = require("jsonwebtoken");
-const nodemailer = require("nodemailer");
+const jwt = require('jsonwebtoken');
+const nodemailer = require('nodemailer');
 
 // ✅ SENDGRID
 const transporter = nodemailer.createTransport({
@@ -63,44 +63,87 @@ function validateOrderInput(req, res) {
 async function generateDownloadLink(fileKey) {
   const secret = process.env.DOWNLOAD_SECRET;
   if (!secret) throw new Error('DOWNLOAD_SECRET missing - check Railway Variables');
-  const token = jwt.sign(
-    { file: fileKey },
-    secret,
-    { expiresIn: "24h" }
-  );
+  const token = jwt.sign({ file: fileKey }, secret, { expiresIn: '24h' });
   const backendUrl = (process.env.BACKEND_URL || '').replace(/\/+$/, '');
   return `${backendUrl}/download/verify?token=${token}`;
 }
 
 async function sendDownloadEmail(email, productKey) {
+  console.log('[MAIL] sendDownloadEmail() called for', email, '/ productKey:', productKey);
+
+  // Sanity checks BEFORE touching SendGrid, so we know exactly what's missing
+  if (!process.env.SENDGRID_API_KEY) {
+    console.error('[MAIL][FATAL] SENDGRID_API_KEY is missing in env.');
+    throw new Error('SENDGRID_API_KEY missing');
+  }
+  if (!process.env.EMAIL_FROM) {
+    console.error('[MAIL][FATAL] EMAIL_FROM is missing in env.');
+    throw new Error('EMAIL_FROM missing');
+  }
+  if (!process.env.DOWNLOAD_SECRET) {
+    console.error('[MAIL][FATAL] DOWNLOAD_SECRET is missing in env.');
+    throw new Error('DOWNLOAD_SECRET missing');
+  }
+  if (!process.env.BACKEND_URL) {
+    console.warn('[MAIL][WARN] BACKEND_URL is empty - the download link will be malformed.');
+  }
+
   const product = products.byId(productKey);
-  const fileKey = product?.fileKey || productKey;
-  const link = await generateDownloadLink(fileKey);
+  if (!product) {
+    console.error('[MAIL][FATAL] No product found for productKey:', productKey);
+    throw new Error('Unknown productKey: ' + productKey);
+  }
 
-  await transporter.sendMail({
-    from: process.env.EMAIL_FROM,
-    to: email,
-    subject: "Your ELPOPO Academy access link",
-    html: `
-      <div style="font-family: Arial, sans-serif; line-height:1.6;">
-        <h2>Payment confirmed ✅</h2>
-        <p>Thank you for your purchase.</p>
-        <p>Your secure download link (valid 24h):</p>
-        <p>
-          <a href="${link}" target="_blank" style="color:#d4af37;">
-            Download your product here
-          </a>
-        </p>
-        <hr />
-        <p style="font-size:12px;color:#888;">
-          If you have any issue, contact support.
-        </p>
-      </div>
-    `,
-  });
+  const fileKey = product.fileKey || productKey;
+  console.log('[MAIL] resolved fileKey:', fileKey);
 
-  console.log('[EMAIL SENT]', email);
-  console.log('[DOWNLOAD LINK]', link);
+  let link;
+  try {
+    link = await generateDownloadLink(fileKey);
+    console.log('[MAIL] download link generated OK:', link);
+  } catch (err) {
+    console.error('[MAIL][FATAL] generateDownloadLink failed:', err && err.message);
+    throw err;
+  }
+
+  try {
+    console.log('[MAIL] attempting transporter.sendMail() ->', email);
+    const info = await transporter.sendMail({
+      from: process.env.EMAIL_FROM,
+      to: email,
+      subject: 'Your ELPOPO Academy access link',
+      html: `
+        <div style="font-family: Arial, sans-serif; line-height:1.6;">
+          <h2>Payment confirmed ✅</h2>
+          <p>Thank you for your purchase.</p>
+          <p>Your secure download link (valid 24h):</p>
+          <p>
+            <a href="${link}" target="_blank" style="color:#d4af37;">
+              Download your product here
+            </a>
+          </p>
+          <hr />
+          <p style="font-size:12px;color:#888;">
+            If you have any issue, contact support.
+          </p>
+        </div>
+      `,
+    });
+    console.log('[MAIL][SENT] to:', email, '| messageId:', info && info.messageId);
+    console.log('[MAIL][SENT] response:', info && info.response);
+  } catch (err) {
+    // This is the most likely place the real error is hiding (SendGrid auth,
+    // unverified sender, bad API key, network egress blocked, etc.)
+    console.error('[MAIL][FATAL] transporter.sendMail() threw:', err && err.message);
+    if (err && err.response) {
+      console.error('[MAIL][FATAL] SMTP response:', err.response);
+    }
+    if (err && err.responseCode) {
+      console.error('[MAIL][FATAL] SMTP responseCode:', err.responseCode);
+    }
+    throw err;
+  }
+
   return link;
 }
 
@@ -190,6 +233,8 @@ router.post('/api/create-payment-intent', async (req, res) => {
       status: 'pending',
     });
 
+    console.log('[stripe] PaymentIntent created:', intent.id, '| metadata:', JSON.stringify(intent.metadata));
+
     res.json({ clientSecret: intent.client_secret });
   } catch (err) {
     console.error('create-payment-intent error:', err && err.message);
@@ -216,17 +261,18 @@ async function handleWebhook(req, res) {
 
   console.log('[stripe] event reçu:', event.type);
 
- // ✅ RÉPONDRE IMMÉDIATEMENT à Stripe
-res.json({ received: true });
+  // ✅ RÉPONDRE IMMÉDIATEMENT à Stripe
+  res.json({ received: true });
 
-// 🔍 DEBUG TEMPORAIRE
-console.log('[DEBUG] event.type =', event.type);
-console.log('[DEBUG] event.data.object =', JSON.stringify(event.data.object).substring(0, 300));
+  console.log('[DEBUG] event.type =', event.type);
+  console.log('[DEBUG] event.data.object =', JSON.stringify(event.data.object).substring(0, 300));
 
-// ✅ Traiter l'événement APRÈS
-try {
-  switch (event.type) {
-
+  // ✅ Traiter l'événement APRÈS avoir répondu à Stripe.
+  // IMPORTANT: chaque branche a son propre try/catch interne en plus du
+  // try/catch global, pour qu'une erreur dans un "case" ne soit jamais
+  // avalée silencieusement et soit toujours loggée avec un message clair.
+  try {
+    switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object;
         orders.updateOrder(
@@ -234,10 +280,17 @@ try {
           { status: 'paid', paidAt: new Date().toISOString() }
         );
         console.log('[stripe] checkout.session.completed', session.id);
+
         const emailSession = session.customer_email;
         const productKeySession = session.metadata?.productKey;
+        console.log('[DEBUG] session email:', emailSession, '| productKey:', productKeySession);
+
         if (emailSession && productKeySession) {
-          await sendDownloadEmail(emailSession, productKeySession);
+          try {
+            await sendDownloadEmail(emailSession, productKeySession);
+          } catch (mailErr) {
+            console.error('[ERROR] sendDownloadEmail failed for checkout.session.completed:', mailErr && mailErr.message);
+          }
         } else {
           console.warn('[WARN] Missing email or productKey in session metadata');
         }
@@ -251,12 +304,19 @@ try {
           { status: 'paid', paidAt: new Date().toISOString() }
         );
         console.log('[stripe] payment_intent.succeeded', pi.id);
+
         const emailPi = pi.receipt_email || pi.metadata?.email;
         const productKeyPi = pi.metadata?.productKey;
+        console.log('[DEBUG] pi.receipt_email:', pi.receipt_email, '| pi.metadata:', JSON.stringify(pi.metadata));
+
         if (emailPi && productKeyPi) {
-          await sendDownloadEmail(emailPi, productKeyPi);
+          try {
+            await sendDownloadEmail(emailPi, productKeyPi);
+          } catch (mailErr) {
+            console.error('[ERROR] sendDownloadEmail failed for payment_intent.succeeded:', mailErr && mailErr.message);
+          }
         } else {
-          console.warn('[WARN] Missing email or productKey in payment_intent metadata');
+          console.warn('[WARN] Missing email or productKey in payment_intent metadata. emailPi=', emailPi, 'productKeyPi=', productKeyPi);
         }
         break;
       }
@@ -280,11 +340,12 @@ try {
         console.log('[stripe] unhandled event:', event.type);
     }
   } catch (err) {
-    console.error('[ERROR] webhook processing failed:', err.message);
+    console.error('[ERROR] webhook processing failed:', err && err.message, err && err.stack);
   }
 }
 
-// Webhook router (compatibilité)
+// Webhook router (compatibilité - non monté dans server.js actuellement,
+// conservé pour ne pas casser d'éventuels imports existants)
 webhookRouter.post(
   '/webhook/stripe',
   express.raw({ type: 'application/json' }),
