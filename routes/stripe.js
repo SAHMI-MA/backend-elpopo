@@ -75,17 +75,45 @@ async function sendDownloadEmail(email, productKey) {
 
   sgMail.setApiKey(apiKey);
 
-  const msg = {
-    from: 'contact@sahmi.ma',
-    to: email,
-    subject: 'Your download is ready',
-    html: `
-      <h2>Payment confirmed ✅</h2>
-      <p>Here is your access link:</p>
-      <a href="${link}">Download your product</a>
-      <p>This link expires in 24h.</p>
-    `,
-  };
+const msg = {
+  from: 'contact@sahmi.ma',
+  to: email,
+  subject: 'Your Product Is Ready to Download',
+  html: `
+    <div style="font-family: Arial, sans-serif; line-height: 1.7; color: #333;">
+      <p>Hi,</p>
+
+      <p>Thank you for your purchase.</p>
+
+      <p>Your product is now ready to download.</p>
+
+      <p>
+        You can access it here:<br><br>
+        <a href="${link}" 
+           style="display:inline-block; padding:12px 20px; background:#000; color:#fff; text-decoration:none; border-radius:6px;">
+          Download Your Product
+        </a>
+      </p>
+
+      <p>
+        <strong>Important:</strong> this download link is available for 24 hours only.
+      </p>
+
+      <p>
+        Please download and save your file before the link expires.
+        After 24 hours, access may no longer be available through this link.
+      </p>
+
+      <p>
+        If you have any issue accessing your product, contact us through the website contact form and we’ll help you as soon as possible.
+      </p>
+
+      <p>
+        Thank you for trusting <strong>Elpopo Academy</strong>.
+      </p>
+    </div>
+  `,
+};
 
   console.log('[MAIL] SENDING TO:', email);
 
