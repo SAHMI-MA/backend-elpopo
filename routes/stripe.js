@@ -1,5 +1,5 @@
 // ============================================================================
-// backend/routes/stripe.js (STABLE PRODUCTION VERSION)
+// backend/routes/stripe.js (CLEAN PRODUCTION VERSION)
 // ============================================================================
 
 const express = require('express');
@@ -7,48 +7,32 @@ const Stripe = require('stripe');
 const products = require('../data/products');
 const orders = require('./orders');
 const jwt = require('jsonwebtoken');
-const sgMail = require('@sendgrid/mail');
+const nodemailer = require('nodemailer');
 
 const router = express.Router();
 const webhookRouter = express.Router();
 
 // ======================= SENDGRID =======================
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const transporter = nodemailer.createTransport({
+  host: 'smtp.sendgrid.net',
+  port: 587,
+  auth: {
+    user: 'apikey',
+    pass: process.env.SENDGRID_API_KEY,
+  },
+});
 
 // ======================= STRIPE =======================
 function getStripe() {
   const key = process.env.STRIPE_SECRET_KEY;
-  if (!key) throw new Error('STRIPE_SECRET_KEY missing');
+  if (!key) throw new Error('Missing STRIPE_SECRET_KEY');
   return new Stripe(key);
-}
-
-// ======================= INPUT VALIDATION =======================
-function validateInput(req, res) {
-  const { productKey, name, email } = req.body || {};
-
-  if (!productKey || !name || !email) {
-    res.status(400).json({ error: 'Missing fields' });
-    return null;
-  }
-
-  const product = products.byId(productKey);
-  if (!product) {
-    res.status(400).json({ error: 'Invalid product' });
-    return null;
-  }
-
-  return {
-    product,
-    productKey,
-    name: name.trim(),
-    email: email.trim(),
-  };
 }
 
 // ======================= DOWNLOAD LINK =======================
 async function generateDownloadLink(fileKey) {
   const secret = process.env.DOWNLOAD_SECRET;
-  if (!secret) throw new Error('DOWNLOAD_SECRET missing');
+  if (!secret) throw new Error('Missing DOWNLOAD_SECRET');
 
   const token = jwt.sign({ file: fileKey }, secret, { expiresIn: '24h' });
 
@@ -68,13 +52,15 @@ async function sendDownloadEmail(email, productKey) {
 
   const link = await generateDownloadLink(fileKey);
 
-  const msg = {
-    to: email,
+  console.log('[MAIL] LINK READY');
+
+  const mailOptions = {
     from: "contact@sahmi.ma",
+    to: email,
     subject: "Your access link",
     html: `
       <h2>Payment confirmed ✅</h2>
-      <p>Your download link:</p>
+      <p>Here is your download link:</p>
       <a href="${link}">Download</a>
       <p>Valid 24h</p>
     `,
@@ -83,22 +69,27 @@ async function sendDownloadEmail(email, productKey) {
   console.log('[MAIL] SENDING TO:', email);
 
   try {
-    const result = await sgMail.send(msg);
-    console.log('[MAIL][SUCCESS]', result[0]?.statusCode);
+    const result = await transporter.sendMail(mailOptions);
+
+    console.log('[MAIL][SUCCESS]');
+    console.log('[MAIL] messageId:', result.messageId);
+
     return link;
+
   } catch (err) {
-    console.error('[MAIL][ERROR]', err.response?.body || err.message);
+    console.error('[MAIL][ERROR]', err.message);
     throw err;
   }
 }
 
-// ======================= CHECKOUT SESSION =======================
+// ======================= CHECKOUT =======================
 router.post('/api/checkout/stripe', async (req, res) => {
   try {
-    const v = validateInput(req, res);
-    if (!v) return;
+    const { productKey, name, email } = req.body;
 
-    const { product, productKey, name, email } = v;
+    const product = products.byId(productKey);
+    if (!product) return res.status(400).json({ error: 'Invalid product' });
+
     const stripe = getStripe();
 
     const session = await stripe.checkout.sessions.create({
@@ -126,17 +117,6 @@ router.post('/api/checkout/stripe', async (req, res) => {
       },
     });
 
-    orders.saveOrder({
-      provider: 'stripe',
-      providerOrderId: session.id,
-      productKey,
-      productName: product.name,
-      amountCents: product.amountCents,
-      currency: product.currency || 'usd',
-      customer: { name, email },
-      status: 'pending',
-    });
-
     res.json({ id: session.id, url: session.url });
 
   } catch (err) {
@@ -148,10 +128,11 @@ router.post('/api/checkout/stripe', async (req, res) => {
 // ======================= PAYMENT INTENT =======================
 router.post('/api/create-payment-intent', async (req, res) => {
   try {
-    const v = validateInput(req, res);
-    if (!v) return;
+    const { productKey, name, email } = req.body;
 
-    const { product, productKey, name, email } = v;
+    const product = products.byId(productKey);
+    if (!product) return res.status(400).json({ error: 'Invalid product' });
+
     const stripe = getStripe();
 
     const intent = await stripe.paymentIntents.create({
@@ -191,6 +172,7 @@ async function handleWebhook(req, res) {
 
   res.json({ received: true });
 
+  // 🔥 SAFE BACKGROUND EXECUTION
   setImmediate(async () => {
     try {
 
@@ -199,6 +181,8 @@ async function handleWebhook(req, res) {
 
         const email = pi.metadata?.email;
         const productKey = pi.metadata?.productKey;
+
+        console.log('[DEBUG] email:', email);
 
         if (!email || !productKey) return;
 
@@ -222,15 +206,11 @@ async function handleWebhook(req, res) {
   });
 }
 
-// ======================= ROUTES EXPORT =======================
+// ======================= ROUTES =======================
 webhookRouter.post(
   '/webhook/stripe',
   express.raw({ type: 'application/json' }),
   handleWebhook
 );
 
-module.exports = {
-  router,
-  webhookRouter,
-  handleWebhook,
-};
+module.exports = { router, webhookRouter, handleWebhook };
