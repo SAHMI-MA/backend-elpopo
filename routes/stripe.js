@@ -1,5 +1,5 @@
 // ============================================================================
-// backend/routes/stripe.js (FIXED SAFE VERSION)
+// backend/routes/stripe.js (STABLE FIX VERSION)
 // ============================================================================
 
 const express = require('express');
@@ -8,13 +8,13 @@ const products = require('../data/products');
 const orders = require('./orders');
 const jwt = require('jsonwebtoken');
 
-// 🔥 FIX IMPORTANT: on remplace SMTP par SendGrid API
+// 🔥 FIX: SendGrid API (remplace nodemailer SMTP)
 const sgMail = require('@sendgrid/mail');
 
 const router = express.Router();
 const webhookRouter = express.Router();
 
-// ======================= SENDGRID API =======================
+// ======================= SENDGRID =======================
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // ======================= STRIPE =======================
@@ -49,22 +49,22 @@ async function sendDownloadEmail(email, productKey) {
 
   console.log('[MAIL] LINK READY');
 
-  const msg = {
-    to: email,
-    from: "contact@sahmi.ma",
-    subject: "Your access link",
-    html: `
-      <h2>Payment confirmed ✅</h2>
-      <p>Here is your download link:</p>
-      <a href="${link}">Download</a>
-      <p>Valid 24h</p>
-    `,
-  };
+  const htmlContent = `
+    <h2>Payment confirmed ✅</h2>
+    <p>Here is your download link:</p>
+    <a href="${link}">Download your product</a>
+    <p>Valid 24h</p>
+  `;
 
   console.log('[MAIL] SENDING TO:', email);
 
   try {
-    const result = await sgMail.send(msg);
+    const result = await sgMail.send({
+      to: email,
+      from: "contact@sahmi.ma",
+      subject: "Your access link",
+      html: htmlContent,
+    });
 
     console.log('[MAIL][SUCCESS]');
     console.log('[MAIL] status:', result[0]?.statusCode);
@@ -111,6 +111,17 @@ router.post('/api/checkout/stripe', async (req, res) => {
         email,
         customerName: name,
       },
+    });
+
+    orders.saveOrder({
+      provider: 'stripe',
+      providerOrderId: session.id,
+      productKey,
+      productName: product.name,
+      amountCents: product.amountCents,
+      currency: product.currency || 'usd',
+      customer: { name, email },
+      status: 'pending',
     });
 
     res.json({ id: session.id, url: session.url });
