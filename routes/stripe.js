@@ -76,7 +76,7 @@ async function sendDownloadEmail(email, productKey) {
   sgMail.setApiKey(apiKey);
 
 const msg = {
-  from: 'contact@sahmi.ma',
+  from: 'admin@reframelayers.com',
   to: email,
   subject: 'Your Product Is Ready to Download',
   html: `
