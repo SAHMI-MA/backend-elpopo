@@ -149,7 +149,7 @@ router.post('/api/checkout/stripe', async (req, res) => {
           },
         },
       ],
-      success_url: process.env.SUCCESS_URL,
+      success_url: `${process.env.SUCCESS_URL}?product=${product.id}`,
       cancel_url: process.env.CANCEL_URL,
       metadata: {
         productKey: product.id,
