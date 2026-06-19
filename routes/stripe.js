@@ -276,4 +276,23 @@ webhookRouter.post(
   handleWebhook
 );
 
+router.get('/api/download-link/:productKey', async (req, res) => {
+  try {
+    const productKey = req.params.productKey;
+
+    const product = products.byId(productKey);
+    if (!product) {
+      return res.status(404).json({ error: 'Product not found' });
+    }
+
+    const fileKey = product.fileKey || productKey;
+    const link = await generateDownloadLink(fileKey);
+
+    res.json({ link });
+  } catch (err) {
+    console.error('[DOWNLOAD LINK ERROR]', err.message);
+    res.status(500).json({ error: 'Cannot generate link' });
+  }
+});
+
 module.exports = { router, webhookRouter, handleWebhook };
